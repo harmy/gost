@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ginuerzh/gost"
+	"github.com/go-log/log"
 )
 
 type peerConfig struct {
@@ -31,6 +34,46 @@ func newPeerConfig() *peerConfig {
 }
 
 func (cfg *peerConfig) Validate() {
+}
+
+func (cfg *peerConfig) periodReloadRemote(cfgURL string) error {
+	if cfgURL == "" {
+		return nil
+	}
+
+	client := http.Client{}
+	for {
+		if cfg.Period() < 0 {
+			log.Log("[reload] stopped:", cfgURL)
+			return nil
+		}
+		period := cfg.Period()
+		if period == 0 {
+			log.Log("[reload] disabled:", cfgURL)
+			return nil
+		}
+		if period < time.Second {
+			period = time.Second
+		}
+		<-time.After(period)
+
+		if _, err := cfg.group.Next(); err == nil {
+			log.Log("[reload] still got alive node in group, skip reloading.")
+			continue
+		}
+
+		resp, err := client.Get(cfgURL)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("fetch remote resource error, reply status code is not equals to 200")
+		}
+		if err := cfg.Reload(resp.Body); err != nil {
+			log.Logf("[reload] %s: %s", cfgURL, err)
+		}
+	}
 }
 
 func (cfg *peerConfig) Reload(r io.Reader) error {

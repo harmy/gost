@@ -83,7 +83,7 @@ func (r *route) parseChain() (*gost.Chain, error) {
 					return nil, fmt.Errorf("fetch remote resource error, reply status code is not equals to 200")
 				}
 				peerCfg.Reload(resp.Body)
-				go gost.PeriodReloadRemote(peerCfg, cfg)
+				go peerCfg.periodReloadRemote(cfg)
 			} else {
 				f, err := os.Open(cfg)
 				defer f.Close()

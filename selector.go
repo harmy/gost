@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-log/log"
 )
 
 var (
@@ -192,7 +194,7 @@ func (f *FailFilter) Filter(nodes []Node) []Node {
 	nl := []Node{}
 	for i := range nodes {
 		marker := nodes[i].marker.Clone()
-		// log.Logf("%s: %d/%d %v/%v", nodes[i], marker.FailCount(), f.MaxFails, marker.FailTime(), f.FailTimeout)
+		log.Logf("%s: %d/%d %v/%v", nodes[i], marker.FailCount(), f.MaxFails, marker.FailTime(), f.FailTimeout)
 		if marker.FailCount() < uint32(maxFails) ||
 			time.Since(time.Unix(marker.FailTime(), 0)) >= failTimeout {
 			nl = append(nl, nodes[i])

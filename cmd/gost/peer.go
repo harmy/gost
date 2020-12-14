@@ -34,6 +34,8 @@ func newPeerConfig() *peerConfig {
 }
 
 func (cfg *peerConfig) Validate() {
+	buf, _ := json.Marshal(cfg)
+	log.Log("[peer] reloaded config: ", string(buf))
 }
 
 func (cfg *peerConfig) periodReloadRemote(cfgURL string) error {
@@ -57,9 +59,11 @@ func (cfg *peerConfig) periodReloadRemote(cfgURL string) error {
 		}
 		<-time.After(period)
 
-		if _, err := cfg.group.Next(); err == nil {
-			log.Log("[reload] still got alive node in group, skip reloading.")
-			continue
+		if len(cfg.group.Nodes()) > 0 {
+			if _, err := cfg.group.Next(); err == nil {
+				log.Log("[reload] still got alive node in group, skip reloading.")
+				continue
+			}
 		}
 
 		resp, err := client.Get(cfgURL)

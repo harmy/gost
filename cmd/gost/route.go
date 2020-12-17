@@ -63,6 +63,7 @@ func (r *route) parseChain() (*gost.Chain, error) {
 					FailTimeout: nodes[0].GetDuration("fail_timeout"),
 				},
 				&gost.InvalidFilter{},
+				&gost.DeadFilter{},
 			),
 			gost.WithStrategy(gost.NewStrategy(nodes[0].Get("strategy"))),
 		)
@@ -73,17 +74,20 @@ func (r *route) parseChain() (*gost.Chain, error) {
 			peerCfg.baseNodes = nodes
 
 			if strings.HasPrefix(cfg, "http") {
+				cfgURL := strings.ReplaceAll(cfg, " ", "+") //query not encoeded will cost 400 error in haproxy
 				client := http.Client{}
-				resp, err := client.Get(cfg)
+				resp, err := client.Get(cfgURL)
 				if err != nil {
 					return nil, err
 				}
 				defer resp.Body.Close()
-				if resp.StatusCode != 200 {
-					return nil, fmt.Errorf("fetch remote resource error, reply status code is not equals to 200")
+				if resp.StatusCode == 200 {
+					peerCfg.Reload(resp.Body)
+				} else {
+					log.Logf("failed to get response from %s, status code: %d", cfgURL, resp.StatusCode)
 				}
-				peerCfg.Reload(resp.Body)
-				go peerCfg.periodReloadRemote(cfg)
+				go peerCfg.periodReloadRemote(cfgURL)
+				go peerCfg.periodTestDelay()
 			} else {
 				f, err := os.Open(cfg)
 				defer f.Close()

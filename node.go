@@ -3,11 +3,14 @@ package gost
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Dreamacro/clash/adapters/outbound"
 )
 
 var (
@@ -31,6 +34,7 @@ type Node struct {
 	ConnectOptions   []ConnectOption
 	Client           *Client
 	marker           *failMarker
+	tester           *delayTester
 	Bypass           *Bypass
 }
 
@@ -51,6 +55,18 @@ func ParseNode(s string) (node Node, err error) {
 		return
 	}
 
+	h, p, _ := net.SplitHostPort(u.Host)
+	port, _ := strconv.Atoi(p)
+	password, _ := u.User.Password()
+	httpOption := outbound.HttpOption{
+		Name:     fmt.Sprintf("%s://%s", u.Scheme, u.Host),
+		Server:   h,
+		Port:     port,
+		UserName: u.User.Username(),
+		Password: password,
+	}
+	proxy := outbound.NewProxy(outbound.NewHttp(httpOption))
+
 	node = Node{
 		Addr:   u.Host,
 		Host:   u.Host,
@@ -58,6 +74,7 @@ func ParseNode(s string) (node Node, err error) {
 		Values: u.Query(),
 		User:   u.User,
 		marker: &failMarker{},
+		tester: &delayTester{Proxy: proxy},
 		url:    u,
 	}
 
@@ -115,8 +132,14 @@ func ParseNode(s string) (node Node, err error) {
 	default:
 		node.Protocol = ""
 	}
-
 	return
+}
+
+func (node *Node) TestDelay() {
+	if node.tester == nil {
+		return
+	}
+	node.tester.TestDelay(node)
 }
 
 // MarkDead marks the node fail status.
@@ -140,6 +163,9 @@ func (node *Node) Clone() Node {
 	nd := *node
 	if node.marker != nil {
 		nd.marker = node.marker.Clone()
+	}
+	if node.tester != nil {
+		nd.tester = node.tester.Clone()
 	}
 	return nd
 }

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,25 +16,39 @@ import (
 )
 
 type peerConfig struct {
-	Strategy     string        `json:"strategy"`
-	MaxFails     int           `json:"max_fails"`
-	FailTimeout  time.Duration `json:"fail_timeout"`
-	ReloadPeriod time.Duration `json:"reload"`
-	Nodes        []string      `json:"nodes"`
-	group        *gost.NodeGroup
-	baseNodes    []gost.Node
-	stopped      chan struct{}
+	Strategy        string        `json:"strategy"`
+	MaxFails        int           `json:"max_fails"`
+	FailTimeout     time.Duration `json:"fail_timeout"`
+	ReloadPeriod    time.Duration `json:"reload"`
+	TestDelayPeriod time.Duration `json:"test_peroid"`
+	Nodes           []string      `json:"nodes"`
+	group           *gost.NodeGroup
+	baseNodes       []gost.Node
+	stopped         chan struct{}
 }
 
 func newPeerConfig() *peerConfig {
 	return &peerConfig{
-		stopped: make(chan struct{}),
+		Strategy:        "fifo",
+		ReloadPeriod:    time.Second * 15,
+		TestDelayPeriod: time.Second * 20,
+		stopped:         make(chan struct{}),
 	}
 }
 
 func (cfg *peerConfig) Validate() {
 	buf, _ := json.Marshal(cfg)
 	log.Log("[peer] reloaded config: ", string(buf))
+}
+
+func (cfg *peerConfig) periodTestDelay() {
+	for {
+		nodes := cfg.group.Nodes()
+		for _, n := range nodes {
+			n.TestDelay()
+		}
+		<-time.After(cfg.TestDelayPeriod)
+	}
 }
 
 func (cfg *peerConfig) periodReloadRemote(cfgURL string) error {
@@ -68,15 +81,18 @@ func (cfg *peerConfig) periodReloadRemote(cfgURL string) error {
 
 		resp, err := client.Get(cfgURL)
 		if err != nil {
-			return err
+			log.Logf("[reload] failed to get response from %s", cfgURL)
+			continue
 		}
-		defer resp.Body.Close()
+
 		if resp.StatusCode != 200 {
-			return fmt.Errorf("fetch remote resource error, reply status code is not equals to 200")
+			log.Logf("[reload] response from %s error, status code expect 200, got %d", cfgURL, resp.StatusCode)
+			continue
 		}
 		if err := cfg.Reload(resp.Body); err != nil {
 			log.Logf("[reload] %s: %s", cfgURL, err)
 		}
+		resp.Body.Close()
 	}
 }
 
@@ -99,6 +115,7 @@ func (cfg *peerConfig) Reload(r io.Reader) error {
 				FailTimeout: cfg.FailTimeout,
 			},
 			&gost.InvalidFilter{},
+			&gost.DeadFilter{},
 		),
 		gost.WithStrategy(gost.NewStrategy(cfg.Strategy)),
 	)

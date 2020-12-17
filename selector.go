@@ -1,6 +1,7 @@
 package gost
 
 import (
+	"context"
 	"errors"
 	"math/rand"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Dreamacro/clash/adapters/outbound"
 	"github.com/go-log/log"
 )
 
@@ -192,13 +194,18 @@ func (f *FailFilter) Filter(nodes []Node) []Node {
 		return nodes
 	}
 	nl := []Node{}
-	for i := range nodes {
-		marker := nodes[i].marker.Clone()
-		log.Logf("%s: %d/%d %v/%v", nodes[i], marker.FailCount(), f.MaxFails, marker.FailTime(), f.FailTimeout)
+	for _, node := range nodes {
+		marker := node.marker.Clone()
+		if Debug {
+			log.Logf("[fail filter] %d@%s: %d/%d %v/%v", node.ID, node, marker.FailCount(), f.MaxFails, marker.FailTime(), f.FailTimeout)
+		}
 		if marker.FailCount() < uint32(maxFails) ||
 			time.Since(time.Unix(marker.FailTime(), 0)) >= failTimeout {
-			nl = append(nl, nodes[i])
+			nl = append(nl, node)
 		}
+	}
+	if Debug {
+		log.Logf("[fail filter] %v", nl)
 	}
 	return nl
 }
@@ -214,10 +221,10 @@ type InvalidFilter struct{}
 // Filter filters invalid nodes.
 func (f *InvalidFilter) Filter(nodes []Node) []Node {
 	nl := []Node{}
-	for i := range nodes {
-		_, sport, _ := net.SplitHostPort(nodes[i].Addr)
+	for _, node := range nodes {
+		_, sport, _ := net.SplitHostPort(node.Addr)
 		if port, _ := strconv.Atoi(sport); port > 0 {
-			nl = append(nl, nodes[i])
+			nl = append(nl, node)
 		}
 	}
 	return nl
@@ -225,6 +232,32 @@ func (f *InvalidFilter) Filter(nodes []Node) []Node {
 
 func (f *InvalidFilter) String() string {
 	return "invalid"
+}
+
+// DeadFilter filters the dead node.
+// A node is dead if its delay is 65535.
+type DeadFilter struct{}
+
+// Filter filters dead nodes.
+func (f *DeadFilter) Filter(nodes []Node) []Node {
+	nl := []Node{}
+	for _, node := range nodes {
+		tester := node.tester.Clone()
+		if Debug {
+			log.Logf("[dead filter] %d@%s: %d/%v", node.ID, node, tester.Proxy.LastDelay(), tester.Proxy.Alive())
+		}
+		if tester.Proxy.Alive() {
+			nl = append(nl, node)
+		}
+	}
+	if Debug {
+		log.Logf("[dead filter] %v", nl)
+	}
+	return nl
+}
+
+func (f *DeadFilter) String() string {
+	return "dead"
 }
 
 type failMarker struct {
@@ -292,5 +325,72 @@ func (m *failMarker) Clone() *failMarker {
 	return &failMarker{
 		failCount: fc,
 		failTime:  ft,
+	}
+}
+
+type delayTester struct {
+	Proxy *outbound.Proxy
+	mux   sync.RWMutex
+}
+
+func (m *delayTester) LastTestTime() (res int64) {
+	if m == nil || m.Proxy == nil {
+		return 0
+	}
+
+	m.mux.Lock()
+	defer m.mux.Unlock()
+	history := m.Proxy.DelayHistory()
+	if len(history) > 0 {
+		res = history[len(history)-1].Time.Unix()
+	}
+	return
+}
+
+func (m *delayTester) LastDelay() uint16 {
+	if m == nil || m.Proxy == nil {
+		return 0
+	}
+
+	m.mux.Lock()
+	defer m.mux.Unlock()
+
+	return m.Proxy.LastDelay()
+}
+
+func (m *delayTester) TestDelay(node *Node) (err error) {
+	if m == nil || m.Proxy == nil {
+		return
+	}
+
+	m.mux.Lock()
+	defer m.mux.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	urls := []string{
+		"http://www.gstatic.com/generate_204",
+		"http://www.msftconnecttest.com/connecttest.txt",
+		"http://captive.apple.com",
+		"http://detectportal.firefox.com/success.txt",
+		"http://cp.cloudflare.com",
+	}
+	_, err = m.Proxy.URLTest(ctx, urls[rand.Intn(len(urls))])
+	if Debug {
+		log.Logf("[tester] delay: %d", m.Proxy.LastDelay())
+	}
+	return
+}
+
+func (m *delayTester) Clone() *delayTester {
+	if m == nil {
+		return nil
+	}
+
+	m.mux.RLock()
+	defer m.mux.RUnlock()
+
+	return &delayTester{
+		Proxy: m.Proxy,
 	}
 }
